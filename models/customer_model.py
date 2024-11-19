@@ -32,6 +32,31 @@ class customer_model():
         except Exception as e:
             return ({'success': False, 'message': str(e)}, 500)
     
+    def register(self, data: dict) -> dict:
+        try:
+            print("Inside register method")
+            email = data["email"]
+            firstname = data["firstname"]
+            lastname = data["lastname"]
+            password = data["password"]
+            username = data["username"]
+            
+            # Check if customer already exists
+            customer_email = session.query(Customer).filter_by(email=email).first()
+            customer_username = session.query(Customer).filter_by(username=username).first()
+            if customer_email or customer_username:
+                return ({'success': False, 'message': 'An account with the same email or username already exists, please try using different credentials.'}, 409)
+            
+            # Create new customer
+            new_customer = Customer(email=email, firstname=firstname, lastname=lastname, username= username, password=password)
+            session.add(new_customer)
+            session.commit()
+            
+            return ({'success': True, 'message': 'Customer created successfully.'}, 201)
+        
+        except Exception as e:
+            return ({'success': False, 'message': str(e)}, 500)
+    
 class Customer(Base):
     __tablename__ = 'customer'
     email = Column(String(100), primary_key=True)
