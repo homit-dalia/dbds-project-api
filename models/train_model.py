@@ -1,6 +1,6 @@
 from app import session, Base
 from common import object_as_dict
-from sqlalchemy import Column, String, DateTime, Time, Float, ForeignKey, func
+from sqlalchemy import Column, String, Integer, ForeignKey, Date, Enum, Numeric, DateTime, func, DateTime, Time, Float
 from sqlalchemy.orm import relationship, aliased
 
 class train_model():
@@ -47,6 +47,8 @@ class train_model():
             return ({'success': True, 'message': 'Schedules fetched successfully.', 'schedules': schedules}, 200)
 
         except Exception as e:
+            session.rollback()
+            print(e)    
             return ({'success': False, 'message': f'Error fetching schedules: {str(e)}'}, 500)
 
     def fetch_stops(self, data: dict) -> dict:
@@ -73,8 +75,88 @@ class train_model():
             return ({'success': True, 'message': 'Stops fetched successfully.', 'stops': stops_list}, 200)
         
         except Exception as e:
+            session.rollback()
             print(e)
             return ({'success': False, 'message': f'Error fetching stops: {str(e)}'}, 500)
+    
+    def reserve_ticket(self, data: dict) -> dict:
+        try:
+            # Calculate discounted price
+            discount_rate = 0.1  # 10% discount
+            discounted_price = (
+                data["price"] * (1 - discount_rate)
+                if data["passenger_category"] != "regular"
+                else data["price"]
+            )
+
+            reservation = Reservation(
+                transit_line=data["transit_line"],
+                customer_email=data["customer_email"],
+                seat_number="A1",  # Hardcoded for now
+                passenger_category=data.get("passenger_category", "regular"),
+                price=data["price"],
+                discounted_price=discounted_price,
+                status="active",
+            )
+
+            session.add(reservation)
+            session.commit()
+
+            return ({'success': True, 'message': 'Ticket reserved successfully.'}, 200)
+
+        except Exception as e:
+            session.rollback()
+            print(e)
+            return ({'success': False,'message': 'Error reserving ticket. Please try again later.'}, 500)
+
+    def fetch_reservations(self, data: dict) -> dict:
+        try:
+            email = data["email"]
+            reservations = session.query(Reservation).filter_by(customer_email=email).all()
+
+            # Validate reservations
+            if not reservations:
+                return {'success': False, 'message': 'No reservations found for the specified customer.'}, 404
+
+            reservations_list = [object_as_dict(reservation) for reservation in reservations]
+            
+            transit_lines = {}
+            for reservation in reservations_list:
+                transit_line = reservation["transit_line"]
+                if transit_line not in transit_lines:
+                    schedule = session.query(Schedule).filter_by(transit_line=transit_line).first()
+                    transit_lines[transit_line] = object_as_dict(schedule)
+            
+            for reservation in reservations_list:
+                transit_line = reservation["transit_line"]
+                reservation["schedule"] = transit_lines[transit_line]
+            print(reservations_list)
+            return {'success': True, 'message': 'Reservations fetched successfully.', 'reservations': reservations_list}, 200
+
+        except Exception as e:
+            session.rollback()
+            print(e)
+            return {'success': False, 'message': 'Error fetching reservations. Please try again later.'}, 500
+        
+    def cancel_reservation(self, data: dict) -> dict:
+        try:
+            reservation_id = data["reservation_id"]
+            reservation = session.query(Reservation).filter_by(reservation_id=reservation_id).first()
+
+            # Validate reservation
+            if not reservation:
+                return {'success': False, 'message': 'Reservation not found.'}, 404
+            
+            # Update reservation status
+            reservation.status = 'cancelled'
+            session.commit()
+
+            return {'success': True, 'message': 'Reservation cancelled successfully.'}, 200
+
+        except Exception as e:
+            session.rollback()
+            print(e)
+            return {'success': False, 'message': 'Error cancelling reservation. Please try again later.'}, 500
 
 class Station(Base):
     __tablename__ = 'station'
@@ -98,6 +180,7 @@ class Schedule(Base):
     origin_station = relationship('Station', foreign_keys=[origin])
     destination_station = relationship('Station', foreign_keys=[destination])
     train = relationship('Train', foreign_keys=[train_id])
+    reservations = relationship('Reservation', back_populates='train_schedule')
 
 class Train(Base):
     __tablename__ = 'train'
@@ -116,3 +199,27 @@ class Stops(Base):
     station = relationship('Station', foreign_keys=[station_id])
     schedule = relationship('Schedule', foreign_keys=[transit_line])
     
+class Reservation(Base):
+    __tablename__ = 'reservations'
+
+    reservation_id = Column(Integer, primary_key=True, autoincrement=True)  # Corrected column name
+    transit_line = Column(String(30), ForeignKey('train_schedule.transit_line'), nullable=False)
+    customer_email = Column(String(100), ForeignKey('customer.email'), nullable=False)
+    seat_number = Column(String(20), nullable=True)
+    passenger_category = Column(
+        Enum('regular', 'child', 'elderly', 'disabled', name='passenger_category_enum'),
+        default='regular',
+        nullable=True
+    )
+    price = Column(Numeric(10, 2), nullable=False)
+    discounted_price = Column(Numeric(10, 2), nullable=False)
+    status = Column(
+        Enum('active', 'cancelled', name='reservation_status_enum'),
+        default='active',
+        nullable=True
+    )
+    created_at = Column(DateTime, default=func.now(), nullable=True)
+
+    # Relationships
+    customer = relationship('Customer', back_populates='reservations')
+    train_schedule = relationship('Schedule', back_populates='reservations')

@@ -11,3 +11,15 @@ def fetch_schedules():
 @app.route('/train/fetch/stops', methods=["POST"])
 def fetch_stops():
     return make_response(obj.fetch_stops(data=request.get_json()))
+
+@app.route('/train/reserve', methods=["POST"])
+def reserve():
+    return make_response(obj.reserve_ticket(data=request.get_json()))
+
+@app.route('/train/fetch/reservations', methods=["POST"])
+def fetch_reservations():
+    return make_response(obj.fetch_reservations(data=request.get_json()))
+
+@app.route('/train/reserve/cancel', methods=["POST"])
+def cancel_reservation():
+    return make_response(obj.cancel_reservation(data=request.get_json()))

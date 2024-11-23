@@ -1,7 +1,7 @@
 from sqlalchemy import Column, String
 from app import session, Base
 from common import object_as_dict
-
+from sqlalchemy.orm import relationship
 class customer_model():
     def __init__(self) -> None:
         pass
@@ -64,3 +64,6 @@ class Customer(Base):
     lastname = Column(String(50), nullable=False)
     username = Column(String(50))  # Optional for now
     password = Column(String(255), nullable=False)
+
+    # Define the relationship with Reservation
+    reservations = relationship('Reservation', back_populates='customer', cascade='all, delete-orphan')
