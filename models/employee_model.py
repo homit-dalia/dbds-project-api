@@ -1,9 +1,9 @@
 from app import session, Base
 from datetime import datetime, timedelta
 from common import object_as_dict
-from sqlalchemy import Column, String, Integer, ForeignKey, Date, Enum, Numeric, DateTime, func, DateTime, Time, Float
+from sqlalchemy import Column, String, Integer, ForeignKey, Date, Enum, Numeric, DateTime, func, DateTime, Time, Float, Text
 from sqlalchemy.orm import relationship, aliased
-from models.train_model import Schedule, Station, Stops, Reservation
+from models.train_model import Schedule, Station, Stops, Reservation, Train
 
 class employee_model():
     def __init__(self) -> None:
@@ -138,28 +138,30 @@ class employee_model():
             # Query the database to calculate total sales per month for the last 6 months
             sales_report = (
                 session.query(
-                    func.date_trunc('month', Reservation.created_at).label('month'),  # Truncate to month
+                    func.DATE_FORMAT(Reservation.created_at, '%Y-%m').label('month'),  # Format date to 'YYYY-MM'
                     func.sum(Reservation.discounted_price).label('total_sales')       # Sum discounted prices
                 )
                 .filter(Reservation.created_at >= six_months_ago)  # Only include the last 6 months
                 .filter(Reservation.status == 'active')            # Include only active reservations
-                .group_by(func.date_trunc('month', Reservation.created_at))  # Group by month
-                .order_by(func.date_trunc('month', Reservation.created_at))  # Order by month
+                .group_by(func.DATE_FORMAT(Reservation.created_at, '%Y-%m'))  # Group by formatted month
+                .order_by(func.DATE_FORMAT(Reservation.created_at, '%Y-%m'))  # Order by month
                 .all()
             )
 
             # Transform query results into a list of dictionaries
             sales_data = [
-                {'month': month.strftime('%Y-%m'), 'total_sales': float(total_sales)}
+                {'month': month, 'total_sales': float(total_sales)}
                 for month, total_sales in sales_report
             ]
 
             return {'success': True, 'message': 'Sales report fetched successfully.', 'data': sales_data}, 200
 
         except Exception as e:
+            # Safely rollback session
             session.rollback()
             print(f"Error fetching sales report: {e}")
-            return {'success': False, 'message': str(e)}, 500    
+            return {'success': False, 'message': str(e)}, 500
+ 
         
     def search_reservation(self, data: dict) -> dict:
         try:
@@ -195,13 +197,10 @@ class employee_model():
 
     def calculate_revenue(self, data: dict) -> dict:
         try:
-            revenue_type = data.get("type")  # "transit_line", "customer_email", or "month"
+            revenue_type = data.get("type", "transit_line")  # "transit_line", "customer_email", or "month"
             
             if not revenue_type or revenue_type not in ["transit_line", "customer_email", "month"]:
-                return {
-                    'success': False,
-                    'message': 'Invalid or missing type. Must be "transit_line", "customer_email", or "month".'
-                }, 400
+                return {'success': False,'message': 'Invalid or missing type. Must be "transit_line", "customer_email", or "month".'}, 400
 
             # Base query to calculate revenue
             query = session.query(
@@ -285,8 +284,291 @@ class employee_model():
             print(f"Error fetching statistics: {e}")
             return {'success': False, 'message': str(e)}, 500
 
+    def get_trains_for_station(self, data: dict) -> dict:
+        try:
+            # Extract station name from the input data
+            station_name = data.get("station_name")
 
-        
+            if not station_name:
+                return {"success": False, "message": "Station name is required."}, 400
+
+            # Query the station ID based on the station name
+            station = session.query(Station).filter(Station.name == station_name).first()
+
+            if not station:
+                return {"success": False, "message": "Station not found."}, 404
+
+            station_id = station.station_id
+
+            # Fetch train schedules where the station is either the origin or destination
+            results = (
+                session.query(
+                    Train.train_id,
+                    Train.name.label("train_name"),
+                    Train.type.label("train_type"),
+                    Schedule.transit_line,
+                    Schedule.origin,
+                    Schedule.destination,
+                    Schedule.departure,
+                    Schedule.arrival,
+                    Schedule.fare,  # Include fare
+                )
+                .join(Schedule, Train.train_id == Schedule.train_id)
+                .filter(
+                    (Schedule.origin == station_id) | (Schedule.destination == station_id)
+                )
+                .order_by(Schedule.departure)  # Sort by departure time
+                .all()
+            )
+
+            # Convert results to a list of dictionaries
+            trains = [
+                {
+                    "train_id": row.train_id,
+                    "train_name": row.train_name,
+                    "train_type": row.train_type,
+                    "transit_line": row.transit_line,
+                    "origin": row.origin,
+                    "destination": row.destination,
+                    "departure": row.departure.strftime("%Y-%m-%d %H:%M:%S"),
+                    "arrival": row.arrival.strftime("%Y-%m-%d %H:%M:%S"),
+                    "fare": float(row.fare),  # Convert fare to float for JSON serialization
+                }
+                for row in results
+            ]
+
+            if not trains:
+                return {"success": False, "message": "No trains found for the given station."}, 404
+
+            return {"success": True, "message": "Trains fetched successfully.", "trains": trains}, 200
+
+        except Exception as e:
+            session.rollback()
+            print(f"Error fetching trains for station: {e}")
+            return {"success": False, "message": str(e)}, 500
+
+    def get_customers_by_transit_line_and_date(self, data: dict) -> dict:
+        try:
+            # Extract input data
+            transit_line = data.get("transit_line")
+            travel_date = data.get("travel_date")
+
+            # Validate input
+            if not transit_line or not travel_date:
+                return {'success': False, 'message': 'Transit line and travel date are required.'}, 400
+
+            # Parse travel date
+            try:
+                travel_date = datetime.strptime(travel_date, "%Y-%m-%d")
+            except ValueError:
+                return {'success': False, 'message': 'Invalid date format. Use YYYY-MM-DD.'}, 400
+
+            # Query to find customers with reservations for the specified transit line and date
+            results = (
+                session.query(
+                    Reservation.customer_email,
+                    Reservation.passenger_category,
+                    Reservation.seat_number,
+                    Reservation.price,
+                    Reservation.discounted_price,
+                    Reservation.status
+                )
+                .join(Schedule, Schedule.transit_line == Reservation.transit_line)
+                .filter(Reservation.transit_line == transit_line)
+                .filter(func.date(Schedule.departure) == travel_date.date())
+                .filter(Reservation.status == 'active')  # Only include active reservations
+                .all()
+            )
+
+            # Transform results into a list of dictionaries
+            customers = [
+                {
+                    "customer_email": row.customer_email,
+                    "passenger_category": row.passenger_category,
+                    "seat_number": row.seat_number or "N/A",
+                    "price": float(row.price),
+                    "discounted_price": float(row.discounted_price),
+                    "status": row.status
+                }
+                for row in results
+            ]
+
+            if not customers:
+                return {'success': False, 'message': 'No customers found for the given transit line and date.'}, 404
+
+            return {'success': True, 'message': 'Customers fetched successfully.', 'customers': customers}, 200
+
+        except Exception as e:
+            session.rollback()
+            print(f"Error fetching customers for transit line and date: {e}")
+            return {'success': False, 'message': str(e)}, 500
+
+    def update_train_data(self, data: dict) -> dict:
+        try:
+            # Extract train_id and updated fields from the input data
+            train_id = data.get("train_id")
+
+            if not train_id:
+                return {"success": False, "message": "Train ID is required."}, 400
+
+            # Query the train record by train_id
+            train = session.query(Train).filter(Train.train_id == train_id).first()
+
+            if not train:
+                return {"success": False, "message": "Train not found."}, 404
+
+            # Validate and update the train fields
+            if "name" in data:
+                train.name = data["name"]
+            if "type" in data:
+                train.type = data["type"]
+
+            # Validate and update the schedule fields if provided
+            if "origin" in data or "destination" in data:
+                origin = data.get("origin")
+                destination = data.get("destination")
+
+                # Validate origin and destination station IDs
+                if origin:
+                    origin_station = session.query(Station).filter(Station.station_id == origin).first()
+                    if not origin_station:
+                        return {"success": False, "message": "Invalid origin station ID."}, 400
+                if destination:
+                    destination_station = session.query(Station).filter(Station.station_id == destination).first()
+                    if not destination_station:
+                        return {"success": False, "message": "Invalid destination station ID."}, 400
+
+                # Update the schedule
+                schedule = session.query(Schedule).filter(Schedule.train_id == train_id).first()
+                if not schedule:
+                    return {"success": False, "message": "Schedule not found for the train."}, 404
+
+                if origin:
+                    schedule.origin = origin
+                if destination:
+                    schedule.destination = destination
+
+            # Update other schedule fields
+            if "departure" in data:
+                schedule.departure = data["departure"]
+            if "arrival" in data:
+                schedule.arrival = data["arrival"]
+            if "fare" in data:
+                schedule.fare = data["fare"]
+
+            # Commit the changes
+            session.commit()
+
+            return { "success": True, "message": "Train data updated successfully."}, 200
+
+        except Exception as e:
+            session.rollback()
+            print(f"Error updating train data: {e}")
+            return {"success": False, "message": str(e)}, 500
+
+    def fetch_queries(self, data: dict) -> dict:
+        try:
+            keyword = data.get("keyword", "").strip()
+
+            # Base query
+            query = session.query(Queries)
+
+            # Apply filtering if keyword is provided
+            if keyword:
+                query = query.filter(Queries.question.like(f"%{keyword}%"))
+
+            # Limit results to 5 for default fetch
+            query = query.order_by(Queries.created_time.desc()).limit(5)
+
+            # Execute query
+            results = query.all()
+
+            if not results:
+                return {"success": False, "message": "No queries found."}, 404
+
+            # Convert results to dictionaries
+            queries = [
+                {
+                    "query_id": q.query_id,
+                    "customer_id": q.customer_id,
+                    "question": q.question,
+                    "answer": q.answer,
+                    "employee_id": q.employee_id,
+                    "created_time": q.created_time.strftime("%Y-%m-%d %H:%M:%S"),
+                    "answered_time": q.answered_time.strftime("%Y-%m-%d %H:%M:%S")
+                    if q.answered_time
+                    else None,
+                }
+                for q in results
+            ]
+
+            return {"success": True, "message": "Queries fetched successfully.", "queries": queries}, 200
+
+        except Exception as e:
+            session.rollback()
+            print(f"Error fetching queries: {e}")
+            return {"success": False, "message": str(e)}, 500
+
+    
+    def create_query(self, data: dict) -> dict:
+        try:
+            print(data)
+            # Extract required data from the request
+            customer_id = data.get("customer_id")
+            question = data.get("question")
+
+            if not customer_id or not question:
+                return {"success": False, "message": "Customer ID and question are required."}, 400
+
+            # Create a new query
+            new_query = Queries(
+                customer_id=customer_id,
+                question=question,
+                created_time=datetime.now()
+            )
+
+            # Add and commit to the database
+            session.add(new_query)
+            session.commit()
+
+            return { "success": True, "message": "Query created successfully.", "query": { "query_id": new_query.query_id, "customer_id": new_query.customer_id, "question": new_query.question, "created_time": new_query.created_time.strftime("%Y-%m-%d %H:%M:%S") } }, 200
+
+        except Exception as e:
+            session.rollback()
+            print(f"Error creating query: {e}")
+            return {"success": False, "message": str(e)}, 500
+
+    def answer_query(self, data: dict) -> dict:
+        try:
+            # Extract required data from the request
+            query_id = data.get("query_id")
+            employee_id = data.get("employee_id")
+            answer = data.get("answer")
+
+            if not query_id or not answer:
+                return {"success": False, "message": "Query ID and answer are required."}, 400
+
+            # Retrieve the query from the database
+            query = session.query(Queries).filter(Queries.query_id == query_id).first()
+
+            if not query:
+                return {"success": False, "message": "Query not found."}, 404
+
+            # Update the query with the answer and employee ID
+            query.answer = answer
+            query.employee_id = employee_id
+            query.answered_time = datetime.now()
+
+            # Commit the changes to the database
+            session.commit()
+
+            return { "success": True, "message": "Query answered successfully.", "query": { "query_id": query.query_id, "customer_id": query.customer_id, "question": query.question, "answer": query.answer, "employee_id": query.employee_id, "created_time": query.created_time.strftime("%Y-%m-%d %H:%M:%S"), "answered_time": query.answered_time.strftime("%Y-%m-%d %H:%M:%S"), } }, 200
+
+        except Exception as e:
+            session.rollback()
+            print(f"Error answering query: {e}")
+            return {"success": False, "message": str(e)}, 500
+
 class Employee(Base):
     __tablename__ = 'employee'
 
@@ -297,3 +579,21 @@ class Employee(Base):
     username = Column(String(50), unique=True, nullable=True)
     email = Column(String(100), unique=True, nullable=False)
     password = Column(String(255), nullable=False)  # Store hashed passwords
+    
+    queries = relationship('Queries', back_populates='employee')
+
+    
+class Queries(Base):
+    __tablename__ = 'queries'
+
+    query_id = Column(Integer, primary_key=True, autoincrement=True)  # Unique query ID
+    customer_id = Column(String(100), ForeignKey('customer.email', ondelete='CASCADE'), nullable=False)  # Customer ID (required)
+    question = Column(Text, nullable=False)  # The query/question (required)
+    employee_id = Column(String(100), ForeignKey('employee.email', ondelete='SET NULL'))  # Employee ID (optional)
+    answer = Column(Text, nullable=True)  # Answer to the query (optional)
+    created_time = Column(DateTime, nullable=False)  # Time the query was created
+    answered_time = Column(DateTime, nullable=True)  # Time the query was answered (optional)
+
+    # Relationships (optional, depending on how you handle relationships in your ORM setup)
+    customer = relationship('Customer', back_populates='queries')
+    employee = relationship('Employee', back_populates='queries')

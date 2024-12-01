@@ -81,13 +81,16 @@ class train_model():
     
     def reserve_ticket(self, data: dict) -> dict:
         try:
-            # Calculate discounted price
-            discount_rate = 0.1  # 10% discount
-            discounted_price = (
-                data["price"] * (1 - discount_rate)
-                if data["passenger_category"] != "regular"
-                else data["price"]
-            )
+            discount_rates = {
+                "child": 0.25,    # 25% discount
+                "elderly": 0.35,  # 35% discount
+                "disabled": 0.50, # 50% discount
+                "regular": 0.0    # No discount for regular passengers
+            }
+
+            # Calculate the base discounted price
+            discount_rate = discount_rates.get(data["passenger_category"], 0.0)
+            discounted_price = data["price"] * (1 - discount_rate)
 
             reservation = Reservation(
                 transit_line=data["transit_line"],

@@ -30,6 +30,8 @@ class customer_model():
             return ({'success': True, 'message': 'Customer validated successfully.', 'user': user}, 200)
         
         except Exception as e:
+            session.rollback()
+            print(e)
             return ({'success': False, 'message': str(e)}, 500)
     
     def register(self, data: dict) -> dict:
@@ -67,3 +69,4 @@ class Customer(Base):
 
     # Define the relationship with Reservation
     reservations = relationship('Reservation', back_populates='customer', cascade='all, delete-orphan')
+    queries = relationship('Queries', back_populates='customer', cascade='all, delete-orphan')

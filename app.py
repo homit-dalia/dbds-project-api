@@ -9,9 +9,16 @@ CORS(app)  # Enable CORS on all routes
 Base = declarative_base()
 
 app.config['SQLALCHEMY_DATABASE_URI'] = 'mysql+pymysql://root:homitdalia@localhost:3306/railway_booking'
-engine = create_engine(app.config['SQLALCHEMY_DATABASE_URI'], 
-                       pool_pre_ping=True,  # Test connections before using
-                    pool_recycle=1)    # Recycle connections after 30 minutes)
+engine = create_engine(
+    app.config['SQLALCHEMY_DATABASE_URI'],
+    pool_size=10,  # Number of connections in the pool
+    max_overflow=20,  # Additional connections allowed beyond pool_size
+    pool_timeout=30,  # Timeout in seconds for getting a connection
+    pool_recycle=1800,  # Recycle connections every 30 minutes
+    echo=True,  # Enable SQL query logging
+)
+SessionLocal = sessionmaker(bind=engine)
+
 Session = sessionmaker(bind=engine)
 session = Session()
 

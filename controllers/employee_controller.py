@@ -39,3 +39,27 @@ def employee_revenue():
 @app.route('/employee/metadata', methods=["POST"])
 def employee_metadata():
     return make_response(obj.get_metadata(data=request.get_json()))
+
+@app.route('/employee/station/trains', methods=["POST"])
+def employee_station_trains():
+    return make_response(obj.get_trains_for_station(data=request.get_json()))
+
+@app.route('/employee/transit/customers', methods=["POST"])
+def employee_transit_customers():
+    return make_response(obj.get_customers_by_transit_line_and_date(data=request.get_json()))
+
+@app.route('/employee/update/trains', methods=["POST"])
+def employee_update_trains():
+    return make_response(obj.update_train_data(data=request.get_json()))
+
+@app.route('/employee/fetch/queries', methods=["POST"])
+def employee_fetch_queries():
+    return make_response(obj.fetch_queries(data=request.get_json()))
+
+@app.route('/employee/create/queries', methods=["POST"])
+def employee_create_queries():
+    return make_response(obj.create_query(data=request.get_json()))
+
+@app.route('/employee/answer/queries', methods=["POST"])
+def employee_answer_queries():
+    return make_response(obj.answer_query(data=request.get_json()))
