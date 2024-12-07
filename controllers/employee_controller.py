@@ -63,3 +63,7 @@ def employee_create_queries():
 @app.route('/employee/answer/queries', methods=["POST"])
 def employee_answer_queries():
     return make_response(obj.answer_query(data=request.get_json()))
+
+@app.route('/employee/delete/trainschedule', methods=["POST"])
+def employee_delete_train_schedule():
+    return make_response(obj.delete_train_schedule(data=request.get_json()))

@@ -569,6 +569,33 @@ class employee_model():
             print(f"Error answering query: {e}")
             return {"success": False, "message": str(e)}, 500
 
+    def delete_train_schedule(self, data: dict) -> dict:
+        try:
+            # Extract transit_line from the input data
+            transit_line = data.get("transit_line")
+
+            if not transit_line:
+                return {"success": False, "message": "Transit Line is required."}, 400
+
+            # Query the train schedule based on the transit_line
+            schedule = session.query(Schedule).filter(Schedule.transit_line == transit_line).first()
+
+            if not schedule:
+                return {"success": False, "message": "Train schedule not found."}, 404
+
+            # Delete the schedule
+            session.delete(schedule)
+            session.commit()
+
+            return {"success": True, "message": "Train schedule deleted successfully."}, 200
+
+        except Exception as e:
+            # Rollback the transaction in case of an error
+            session.rollback()
+            print(f"Error deleting train schedule: {e}")
+            return {"success": False, "message": "An error occurred while deleting the train schedule."}, 500
+
+    
 class Employee(Base):
     __tablename__ = 'employee'
 
