@@ -42,13 +42,17 @@ class train_model():
                 schedules.append({
                     **object_as_dict(schedule),
                     "origin_name": origin_name,
+                    "origin_id": schedule.origin,
+                    "destination_id": schedule.destination,
                     "destination_name": destination_name,
-                    "via_stop": False
+                    "via_stop": False,
+                    "departure_time_final": schedule.departure,
+                    "arrival_time_final": schedule.arrival
                 })
 
             # Query 2: Source -> Stop
             source_to_stop_query = (
-                session.query(Schedule, Stops, source_station.name.label("origin_name"), destination_station.name.label("stop_name"))
+                session.query(Schedule, Stops, source_station.name.label("origin_name"), destination_station.station_id, destination_station.name.label("stop_name"), destination_station.city.label("stop_city"))
                 .join(Stops, Schedule.transit_line == Stops.transit_line)
                 .join(source_station, Schedule.origin == source_station.station_id)
                 .filter(source_station.city == source_name)
@@ -57,23 +61,29 @@ class train_model():
             if travel_date:
                 source_to_stop_query = source_to_stop_query.filter(func.date(Schedule.departure) == travel_date)
             source_to_stop_results = source_to_stop_query.all()
-
-            for schedule, stop, origin_name, stop_name in source_to_stop_results:
-                schedules.append({
-                    **object_as_dict(schedule),
-                    "origin_name": origin_name,
-                    "destination_name": stop_name,
-                    "via_stop": True,
-                    "stop_details": {
-                        "stop_station_id": stop.station_id,
-                        "stop_arrival": stop.arrival,
-                        "stop_departure": stop.departure
-                    }
-                })
+            # print("Source to stop results: ", source_to_stop_results)
+            for schedule, stop, origin_name, destination_id, stop_name, stop_city in source_to_stop_results:
+                if stop_city == destination_name:
+                    schedules.append({
+                        **object_as_dict(schedule),
+                        "origin_name": origin_name,
+                        "destination_name": stop_name,
+                        "origin_id": schedule.origin,
+                        "destination_id": destination_id,
+                        "via_stop": True,
+                        "stop_details": {
+                            "stop_station_id": stop.station_id,
+                            "stop_arrival": stop.arrival,
+                            "stop_departure": stop.departure
+                        },
+                        "departure_time_final": schedule.departure,
+                        "arrival_time_final": stop.arrival,
+                        "via_source": True
+                    })
 
             # Query 3: Stop -> Destination
             stop_to_destination_query = (
-                session.query(Schedule, Stops, source_station.name.label("stop_name"), destination_station.name.label("destination_name"))
+                session.query(Schedule, Stops, source_station.station_id, source_station.name.label("stop_name"), destination_station.name.label("destination_name"))
                 .join(Stops, Schedule.transit_line == Stops.transit_line)
                 .join(source_station, Stops.station_id == source_station.station_id)
                 .filter(source_station.city == source_name)
@@ -84,17 +94,21 @@ class train_model():
                 stop_to_destination_query = stop_to_destination_query.filter(func.date(Schedule.departure) == travel_date)
             stop_to_destination_results = stop_to_destination_query.all()
 
-            for schedule, stop, stop_name, destination_name in stop_to_destination_results:
+            for schedule, stop, source_id, stop_name, destination_name in stop_to_destination_results:
                 schedules.append({
                     **object_as_dict(schedule),
                     "origin_name": stop_name,
+                    "origin_id": source_id,
                     "destination_name": destination_name,
+                    "destination_id": schedule.destination,
                     "via_stop": True,
                     "stop_details": {
                         "stop_station_id": stop.station_id,
                         "stop_arrival": stop.arrival,
                         "stop_departure": stop.departure
-                    }
+                    },
+                    "departure_time_final": stop.departure,
+                    "arrival_time_final": schedule.arrival,
                 })
 
             # Query 4: Stop -> Stop
@@ -114,11 +128,8 @@ class train_model():
 
             # Execute the query and fetch stops
             stops = stops_query.all()
-            # print("\nStops: ", stops)
-            # print("Length: ", len(stops))
 
             for stop in stops:
-                # Fetch all stops for the transit line of the current stop
                 transit_line = stop.transit_line
                 transit_stops_query = (
                     session.query(
@@ -130,97 +141,113 @@ class train_model():
                         Stops.departure
                     )
                     .join(Station, Stops.station_id == Station.station_id)
-                    .filter(Stops.transit_line == transit_line)  # Match the same transit line
-                    .order_by(Stops.arrival)  # Order stops by arrival time
+                    .filter(Stops.transit_line == transit_line)
+                    .order_by(Stops.arrival)
                 )
 
-                # Execute the query and fetch all stops for the transit line
                 transit_stops = transit_stops_query.all()
-                # print("\nTransit Stops: ", transit_stops)
 
-                # Check if any stop matches the destination city
                 destination_stop = []
                 origin_index = None
                 destination_index = None
                 for i, transit_stop in enumerate(transit_stops):
-                    # print("Transit Stop City: ", transit_stop.station_city)
-                    # print("Is equal to Destination: ", str(transit_stop.station_city) == destination_city_original)
-                    
                     if transit_stop.station_city == origin_city_original:
                         origin_index = i
                     
                     if transit_stop.station_city == destination_city_original and origin_index is not None:
                         destination_stop.append(transit_stop)
                 
-
                 if destination_stop:
-                    # If a destination stop exists, include it in the response
-                    # fetch the schedule
+                    source_station_name = transit_stops[origin_index].station_name
+                    destination_station_name = destination_stop[0].station_name
                     schedule = session.query(Schedule).filter_by(transit_line=transit_line).first()
                     response = {
                         **object_as_dict(schedule),
-                        "origin_name": source_name,
-                        "destination_name": destination_name,
+                        "origin_name": source_station_name,
+                        "origin_id": transit_stops[origin_index].station_id,
+                        "destination_name": destination_station_name,
+                        "destination_id": destination_stop[0].station_id,
                         "via_stop": True,
                         "stop_details": {
                             "stop_station_id": stop.station_id,
                             "stop_arrival": stop.arrival,
                             "stop_departure": stop.departure
-                        }
+                        },
+                        "departure_time_final": stop.departure,
+                        "arrival_time_final": destination_stop[0].arrival
                     }
-                    
                     schedules.append(response)
-            # print("\n################")
-            # for result in results:
-            #     print(result["transit_line"])
-            # print("Length: ", len(results))
-            
-            
+
             # Validate results
             if not schedules:
                 return {'success': False, 'message': 'No schedules found.'}, 404
 
+            # Further processing and finalizing schedules
             transit_lines = []
             final_schedules = []
+
             for schedule in schedules:
                 if schedule["transit_line"] not in transit_lines:
-                    
-                    try: all_stops = self.fetch_stops({"transit_line": schedule["transit_line"]})[0]["stops"]
-                    except: all_stops = []
+                    try:
+                        all_stops = self.fetch_stops({"transit_line": schedule["transit_line"]})[0]["stops"]
+                    except:
+                        all_stops = []
                     schedule["all_stops"] = all_stops
-                    
-                    # Calculate fare
+
+                    # Fetch the names of origin and destination stations
+                    schedule["transit_origin_name"] = object_as_dict(
+                        session.query(Station).filter_by(station_id=schedule["origin"]).first()
+                    )["name"]
+                    schedule["transit_destination_name"] = object_as_dict(
+                        session.query(Station).filter_by(station_id=schedule["destination"]).first()
+                    )["name"]
+
+                    # Calculate fare per stop
                     total_fare = schedule["fare"]
                     fare_per_stop = total_fare / (len(all_stops) + 1)
-                    
+
+                    # Calculate stops_travelled
+                    stops_travelled = 0
+                    start_counting = True if schedule.get("via_stop", None) else False
+
                     if schedule["via_stop"]:
-                        stops_travelled = 0
+                        print("Via stop")
                         for stop in all_stops:
-                            if stop["city_name"] == destination_city_original:
+                            print(stop["station_name"])
+                            print("Origin Name", schedule["origin_name"])
+                            # Start counting after reaching the origin
+                            if stop["station_name"] == schedule["origin_name"]:
+                                print("Start counting")
+                                start_counting = True
+                                continue
+                            # Stop counting when reaching the destination
+                            if stop["station_name"] == schedule["destination_name"]:
+                                print("Stop counting")
                                 break
-                            stops_travelled += 1
-                        total_fare = fare_per_stop * (stops_travelled)
+                            # Increment stops_travelled only if counting has started
+                            if start_counting:
+                                print("Incrementing stops_travelled")
+                                stops_travelled += 1
+
+                        # Calculate fare for the stops travelled
+                        total_fare = fare_per_stop * (stops_travelled + 1)  # +1 to include the destination
                         schedule["final_fare"] = total_fare
                     else:
+                        print("Not via stop")
                         schedule["final_fare"] = total_fare
-                        
-                    if schedule["transit_line"] == "TL021":
-                        print("Fare: ", schedule["fare"])
-                        print("Fare per stop: ", fare_per_stop)
-                        print("Total Fare: ", total_fare)
-                        # if stops_travelled:
-                        #     print("Stops Travelled: ", stops_travelled)
-                        print("Final Fare: ", schedule["final_fare"])
-                        
+
+                    # Append the schedule to the final list
                     final_schedules.append(schedule)
+
                 transit_lines.append(schedule["transit_line"])
-                
+
             return {'success': True, 'message': 'Schedules fetched successfully.', 'schedules': final_schedules}, 200
 
         except Exception as e:
             session.rollback()
             print(e)
             return {'success': False, 'message': f'Error fetching schedules: {str(e)}'}, 500
+
 
     def fetch_stops(self, data: dict) -> dict:
         try:
@@ -271,6 +298,8 @@ class train_model():
                 price=data["price"],
                 discounted_price=discounted_price,
                 status="active",
+                source_station_id=data["source_station_id"],
+                destination_station_id=data["destination_station_id"]
             )
 
             session.add(reservation)
@@ -299,7 +328,13 @@ class train_model():
                 transit_line = reservation["transit_line"]
                 if transit_line not in transit_lines:
                     schedule = session.query(Schedule).filter_by(transit_line=transit_line).first()
-                    transit_lines[transit_line] = object_as_dict(schedule)
+                    schedule = object_as_dict(schedule)
+                    
+                    # Fetch the names of origin and destination stations
+                    schedule["origin_name"] = object_as_dict(session.query(Station).filter_by(station_id=reservation["source_station_id"]).first())["name"]
+                    schedule["destination_name"] = object_as_dict(session.query(Station).filter_by(station_id=reservation["destination_station_id"]).first())["name"]
+                    
+                    transit_lines[transit_line] = schedule
             
             for reservation in reservations_list:
                 transit_line = reservation["transit_line"]
@@ -391,12 +426,12 @@ class Reservation(Base):
     reservation_id = Column(Integer, primary_key=True, autoincrement=True)
     transit_line = Column(
         String(30), 
-        ForeignKey('train_schedule.transit_line', ondelete='CASCADE'),  # Cascade delete for database
+        ForeignKey('train_schedule.transit_line', ondelete='CASCADE'),  # Cascade delete for train schedule
         nullable=False
     )
     customer_email = Column(
         String(100),
-        ForeignKey('customer.email', ondelete='CASCADE'),  # Optional: Cascade delete for customer
+        ForeignKey('customer.email', ondelete='CASCADE'),  # Cascade delete for customer
         nullable=False
     )
     seat_number = Column(String(20), nullable=True)
@@ -413,10 +448,25 @@ class Reservation(Base):
         nullable=False
     )
     created_at = Column(DateTime, default=func.now(), nullable=False)
+    
+    # New Columns for Source and Destination Stations
+    source_station_id = Column(
+        String(20),
+        ForeignKey('station.station_id', ondelete='CASCADE'),  # Cascade delete for source station
+        nullable=False
+    )
+    destination_station_id = Column(
+        String(20),
+        ForeignKey('station.station_id', ondelete='CASCADE'),  # Cascade delete for destination station
+        nullable=False
+    )
 
     # Relationships
     customer = relationship('Customer', back_populates='reservations')
     train_schedule = relationship('Schedule', back_populates='reservations')
+    source_station = relationship('Station', foreign_keys=[source_station_id])  # Source station relationship
+    destination_station = relationship('Station', foreign_keys=[destination_station_id])  # Destination station relationship
+
 
 
 
