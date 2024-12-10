@@ -128,7 +128,7 @@ class train_model():
 
             # Execute the query and fetch stops
             stops = stops_query.all()
-
+            print("All stops: ", stops)
             for stop in stops:
                 transit_line = stop.transit_line
                 transit_stops_query = (
@@ -138,7 +138,8 @@ class train_model():
                         Station.city.label('station_city'),
                         Station.state.label('station_state'),
                         Stops.arrival,
-                        Stops.departure
+                        Stops.departure,
+                        Stops.station_id
                     )
                     .join(Station, Stops.station_id == Station.station_id)
                     .filter(Stops.transit_line == transit_line)
@@ -146,21 +147,28 @@ class train_model():
                 )
 
                 transit_stops = transit_stops_query.all()
+                print("\nTransit stops query: ", transit_stops)
 
                 destination_stop = []
                 origin_index = None
                 destination_index = None
                 for i, transit_stop in enumerate(transit_stops):
                     if transit_stop.station_city == origin_city_original:
+                        print("Origin city found")
+                        print("Transit stop: ", transit_stop.station_name)
                         origin_index = i
                     
                     if transit_stop.station_city == destination_city_original and origin_index is not None:
+                        print("Destination city found")
+                        print("Transit stop: ", transit_stop.station_name)
                         destination_stop.append(transit_stop)
+                        break
                 
                 if destination_stop:
                     source_station_name = transit_stops[origin_index].station_name
                     destination_station_name = destination_stop[0].station_name
                     schedule = session.query(Schedule).filter_by(transit_line=transit_line).first()
+
                     response = {
                         **object_as_dict(schedule),
                         "origin_name": source_station_name,
@@ -208,7 +216,7 @@ class train_model():
 
                     # Calculate stops_travelled
                     stops_travelled = 0
-                    start_counting = True if schedule.get("via_stop", None) else False
+                    start_counting = True if schedule.get("via_source", None) else False
 
                     if schedule["via_stop"]:
                         print("Via stop")

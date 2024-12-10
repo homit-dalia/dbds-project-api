@@ -418,11 +418,11 @@ class employee_model():
                 return {"success": False, "message": "Train not found."}, 404
 
             # Validate and update the train fields
-            if "name" in data:
-                train.name = data["name"]
+            if "train_name" in data:
+                train.name = data["train_name"]
             if "type" in data:
                 train.type = data["type"]
-
+                
             # Validate and update the schedule fields if provided
             if "origin" in data or "destination" in data:
                 origin = data.get("origin")
@@ -478,7 +478,10 @@ class employee_model():
                 query = query.filter(Queries.question.like(f"%{keyword}%"))
 
             # Limit results to 5 for default fetch
-            query = query.order_by(Queries.created_time.desc()).limit(5)
+            query = query.order_by(Queries.created_time.desc())
+            
+            if (data.get("limit")):
+                query = query.limit(data.get("limit"))
 
             # Execute query
             results = query.all()
